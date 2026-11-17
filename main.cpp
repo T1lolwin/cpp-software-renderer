@@ -5,6 +5,12 @@
 #include <vector>
 #include <iostream>
 
+enum class ShadingMode 
+{
+    GOUROUD,
+    PHONG
+};
+
 constexpr TGAColor white = { 255, 255, 255, 255 }; // attention, BGRA order
 constexpr TGAColor green = { 0, 255,   0, 255 };
 constexpr TGAColor red = { 0,   0, 255, 255 };
@@ -197,6 +203,8 @@ void triangle(
     vec2 t0, vec2 t1, vec2 t2, 
     vec3 w0, vec3 w1, vec3 w2, 
     float ity0, float ity1, float ity2,
+    vec3 n0, vec3 n1, vec3 n2, vec3 light_dir, vec3 cameravec,
+    ShadingMode mode,
     TGAImage& image, std::vector<float>& zbuffer
 ) {
     int minX = std::min({ (int)t0.x, (int)t1.x, (int)t2.x });
@@ -208,6 +216,8 @@ void triangle(
     if (minY < 0) minY = 0;
     if (maxX > image.width()) maxX = image.width()-1;
     if (maxY > image.height()) maxY = image.height()-1;
+
+    float ambient = 0.1; 
  
     for (int x = minX; x <= maxX; ++x)
     {
@@ -219,10 +229,36 @@ void triangle(
             if (bc.x < 0 || bc.y < 0 || bc.z < 0) continue;
             
             float pz = bc.x * w0.z + bc.y * w1.z + bc.z * w2.z;
-            float ity = bc.x * ity0 + bc.y * ity1 + bc.z * ity2;
+            float ity = 0;
+
+            if (mode == ShadingMode::GOUROUD) 
+            {
+                ity = bc.x * ity0 + bc.y * ity1 + bc.z * ity2;
+
+                
+            }
+            else
+            {
+                vec3 np = bc.x * n0 + bc.y * n1 + bc.z * n2;
+
+                np = normalized(np); // 1 ni modositai
+                float IdotN = ( - 1 * light_dir.x) * np.x + (-1*light_dir.y) * np.y + (-1*light_dir.z) * np.z;
+
+                float diffuse = IdotN;
+                diffuse = std::clamp(diffuse, 0.0f, 1.0f);
+
+                vec3 reflect = light_dir + 2*(IdotN) * np;
+                reflect = normalized(reflect);
+                float specular = reflect.x * cameravec.x + reflect.y * cameravec.y + reflect.z * cameravec.z;
+                specular = std::clamp(specular, 0.0f, 1.0f);
+                specular = std::pow(specular, 32);
+                
+
+                ity = ambient + 0.7 * diffuse + 0.5 * specular; // 1超えないように仮の係数をかける
+            }
 
             int color_val = std::clamp((int)(ity * 255), 0, 255);
-            TGAColor face_color = {(uint8_t)color_val, (uint8_t)color_val, (uint8_t)color_val, 255};
+            TGAColor face_color = { (uint8_t)color_val, (uint8_t)color_val, (uint8_t)color_val, 255 };
 
             int idx = x + y * image.width();
 
@@ -231,6 +267,7 @@ void triangle(
                 image.set(x, y, face_color);
                 zbuffer[idx] = pz;
             }
+            
         }
     }
 }
@@ -240,7 +277,6 @@ mat<4, 4> lookat(vec3 eye, vec3 center, vec3 up) {
     vec3 x = normalized(cross(up, z));
     vec3 y = normalized(cross(z, x));
 
-    // 回転の逆行列（Minv）と、平行移動の逆行列（Tr）の器を用意
     mat<4, 4> Minv = {}; // Matrix Inverse
     mat<4, 4> Tr = {}; // Translation
 
@@ -270,6 +306,8 @@ int main(int argc, char** argv) {
     std::vector<float> zbuffer(width * height, -std::numeric_limits<float>::max());
 
     Model* model = new Model("C:/tinyrenderer/obj/african_head/african_head.obj");
+
+    ShadingMode mode = ShadingMode::PHONG;  
     
     
     vec3 light_dir = normalized(vec3 { 0.0f, 0.0f, -1.0f });
@@ -277,6 +315,8 @@ int main(int argc, char** argv) {
     vec3 eye = { 1.0f, 1.0f, 3.0f }; // camera's position
     vec3 center = {0.0f, 0.0f, 0.0f}; // target's position
     vec3 up = {0.0f, 1.0f, 0.0f};
+
+    vec3 cameravec = {0.0f, 0.0f, 1.0f};
 
     mat<4, 4> ModelView = lookat(eye, center, up);
     mat<4, 4> Projection = {};
@@ -295,7 +335,8 @@ int main(int argc, char** argv) {
         
         vec2 screen_coords[3]; // coordinate : 座標
         vec3 world_coords[3]; 
-        float intensity[3];
+        float intensity[3]; //gouroud
+        vec3 normals[3]; // phong
 
         for (int j = 0; j < 3; j++) 
         {
@@ -305,6 +346,7 @@ int main(int argc, char** argv) {
 
             vec3 n = (ModelView * n_local).xyz();
 
+            normals[j] = n;
             intensity[j] = std::clamp(n * -1*light_dir, 0.0, 1.0);
             
             vec4 clip_coords = Projection * ModelView * v;
@@ -330,6 +372,8 @@ int main(int argc, char** argv) {
                 screen_coords[0], screen_coords[1], screen_coords[2], 
                 world_coords[0], world_coords[1], world_coords[2],
                 intensity[0], intensity[1], intensity[2],
+                normals[0], normals[1], normals[2], light_dir, cameravec, 
+                mode,
                 framebuffer, zbuffer
             );
         }
