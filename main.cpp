@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
 
     std::vector<float> zbuffer(width * height, -std::numeric_limits<float>::max());
 
-    Model* model = new Model("C:/tinyrenderer/obj/african_head/african_head.obj");
+    Model* model = new Model("obj/african_head/african_head.obj");
 
     ShadingMode mode = ShadingMode::PHONG;  
     
@@ -334,7 +334,7 @@ int main(int argc, char** argv) {
     {
         
         vec2 screen_coords[3]; // coordinate : 座標
-        vec3 world_coords[3]; 
+        vec3 ndc_coords[3]; 
         float intensity[3]; //gouroud
         vec3 normals[3]; // phong
 
@@ -344,7 +344,7 @@ int main(int argc, char** argv) {
             vec4 n_local = model->normal(i, j);
             n_local[3] = 0.0f;
 
-            vec3 n = (ModelView * n_local).xyz();
+            vec3 n = normalized((ModelView * n_local).xyz());
 
             normals[j] = n;
             intensity[j] = std::clamp(n * -1*light_dir, 0.0, 1.0);
@@ -357,20 +357,20 @@ int main(int argc, char** argv) {
                 clip_coords.z / clip_coords.w
             };
 
-            world_coords[j] = ndc;
+            ndc_coords[j] = ndc;
 
             screen_coords[j].x = (ndc.x + 1.f) * width / 2.f;
             screen_coords[j].y = (ndc.y + 1.f) * height / 2.f;
         }
 
-        vec3 edge1 = world_coords[2] - world_coords[0];
-        vec3 edge2 = world_coords[1] - world_coords[0];
+        vec3 edge1 = ndc_coords[2] - ndc_coords[0];
+        vec3 edge2 = ndc_coords[1] - ndc_coords[0];
         
         if (cross(edge1, edge2).z < 0)
         {
             triangle(
                 screen_coords[0], screen_coords[1], screen_coords[2], 
-                world_coords[0], world_coords[1], world_coords[2],
+                ndc_coords[0], ndc_coords[1], ndc_coords[2],
                 intensity[0], intensity[1], intensity[2],
                 normals[0], normals[1], normals[2], light_dir, cameravec, 
                 mode,
@@ -382,7 +382,7 @@ int main(int argc, char** argv) {
 
     
 
-    framebuffer.write_tga_file("C:/tinyrenderer/framebuffer3.tga");
+    framebuffer.write_tga_file("framebuffer3.tga");
     delete model;
     return 0;
 }
