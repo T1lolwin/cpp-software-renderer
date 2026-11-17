@@ -32,8 +32,9 @@ OpenGL や DirectX などの外部グラフィックスライブラリを一切�
 
 ## ビルドと実行環境 (Build & Environment)
 
-* **言語:** C++17[cite: 8]
-* **ビルドシステム:** CMake (3.10+) / Visual Studio 2022[cite: 8]
+* **言語:** C++17
+* **開発環境 / コンパイラ:** Visual Studio 2026 (MSVC)
+* **ビルドシステム:** CMake 3.10+
 
 ```bash
 cmake -B build
