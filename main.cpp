@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <vector>
 #include <iostream>
+#include <filesystem>
 
 enum class ShadingMode 
 {
@@ -204,6 +205,7 @@ void triangle(
     vec3 w0, vec3 w1, vec3 w2, 
     float ity0, float ity1, float ity2,
     vec3 n0, vec3 n1, vec3 n2, vec3 light_dir, vec3 cameravec,
+    vec2 uv0, vec2 uv1, vec2 uv2, const TGAImage& diffuse_map,
     ShadingMode mode,
     TGAImage& image, std::vector<float>& zbuffer
 ) {
@@ -234,8 +236,6 @@ void triangle(
             if (mode == ShadingMode::GOUROUD) 
             {
                 ity = bc.x * ity0 + bc.y * ity1 + bc.z * ity2;
-
-                
             }
             else
             {
@@ -244,21 +244,28 @@ void triangle(
                 np = normalized(np); // 1 ni modositai
                 float IdotN = ( - 1 * light_dir.x) * np.x + (-1*light_dir.y) * np.y + (-1*light_dir.z) * np.z;
 
-                float diffuse = IdotN;
-                diffuse = std::clamp(diffuse, 0.0f, 1.0f);
+                float diffuse = std::clamp(IdotN, 0.0f, 1.0f);;
 
-                vec3 reflect = light_dir + 2*(IdotN) * np;
-                reflect = normalized(reflect);
+                vec3 reflect = normalized(light_dir + 2 * (IdotN)*np);
                 float specular = reflect.x * cameravec.x + reflect.y * cameravec.y + reflect.z * cameravec.z;
-                specular = std::clamp(specular, 0.0f, 1.0f);
-                specular = std::pow(specular, 32);
+                specular = std::pow(std::clamp(specular, 0.0f, 1.0f), 32);
                 
 
                 ity = ambient + 0.7 * diffuse + 0.5 * specular; // 1超えないように仮の係数をかける
             }
 
-            int color_val = std::clamp((int)(ity * 255), 0, 255);
-            TGAColor face_color = { (uint8_t)color_val, (uint8_t)color_val, (uint8_t)color_val, 255 };
+            vec2 uv_p = bc.x * uv0 + bc.y * uv1 + bc.z * uv2;
+            int tx = std::clamp(static_cast<int>(diffuse_map.width() * uv_p.x), 0, diffuse_map.width() - 1);
+            int ty = std::clamp(static_cast<int>(diffuse_map.height() * uv_p.y), 0, diffuse_map.height() - 1);
+
+            TGAColor tex_color = diffuse_map.get(tx, ty);
+
+            
+            uint8_t b = std::clamp(tex_color.bgra[0] * ity, 0.0f, 255.0f);
+            uint8_t g = std::clamp(tex_color.bgra[1] * ity, 0.0f, 255.0f);
+            uint8_t r = std::clamp(tex_color.bgra[2] * ity, 0.0f, 255.0f);
+            
+            TGAColor face_color = {b, g, r, 255};
 
             int idx = x + y * image.width();
 
@@ -299,13 +306,23 @@ mat<4, 4> lookat(vec3 eye, vec3 center, vec3 up) {
 }
 
 int main(int argc, char** argv) {
+    namespace fs = std::filesystem;
+    while (!fs::exists("obj") && fs::current_path().has_parent_path() && fs::current_path() != fs::current_path().root_path())
+    {
+        fs::current_path(fs::current_path().parent_path());
+    }
+
     constexpr int width = 1000;
     constexpr int height = 1000;
     TGAImage framebuffer(width, height, TGAImage::RGB);
 
     std::vector<float> zbuffer(width * height, -std::numeric_limits<float>::max());
 
-    Model* model = new Model("obj/african_head/african_head.obj");
+    std::cout << "Current path: " << std::filesystem::current_path() << std::endl;
+    std::string model_path = (argc >= 2) ? argv[1] : "obj/african_head/african_head.obj";
+    Model* model = new Model(model_path.c_str());
+    TGAImage diffuse_map;
+    diffuse_map.read_tga_file("obj/african_head/african_head_diffuse.tga");
 
     ShadingMode mode = ShadingMode::PHONG;  
     
@@ -326,14 +343,16 @@ int main(int argc, char** argv) {
         Projection[i][i] = 1.0f;
     }
 
-    float c = norm(eye - center);
+    float c = norm(eye - center); // c - z
     Projection[3][2] = -1.0f / c; // Perspective Projection : 透視図法
 
+    
     
     for (int i = 0; i < model->nfaces(); i++) 
     {
         
         vec2 screen_coords[3]; // coordinate : 座標
+        vec2 uvs[3];
         vec3 ndc_coords[3]; 
         float intensity[3]; //gouroud
         vec3 normals[3]; // phong
@@ -342,6 +361,7 @@ int main(int argc, char** argv) {
         {
             vec4 v = model->vert(i, j);
             vec4 n_local = model->normal(i, j);
+            uvs[j] = model->uv(i, j);
             n_local[3] = 0.0f;
 
             vec3 n = normalized((ModelView * n_local).xyz());
@@ -373,6 +393,7 @@ int main(int argc, char** argv) {
                 ndc_coords[0], ndc_coords[1], ndc_coords[2],
                 intensity[0], intensity[1], intensity[2],
                 normals[0], normals[1], normals[2], light_dir, cameravec, 
+                uvs[0], uvs[1], uvs[2], diffuse_map,
                 mode,
                 framebuffer, zbuffer
             );
@@ -382,7 +403,7 @@ int main(int argc, char** argv) {
 
     
 
-    framebuffer.write_tga_file("framebuffer3.tga");
+    framebuffer.write_tga_file("framebuffer_texture.tga");
     delete model;
     return 0;
 }
