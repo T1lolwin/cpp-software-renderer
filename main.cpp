@@ -5,6 +5,7 @@
 #include <vector>
 #include <iostream>
 #include <filesystem>
+#include <cstring>
 
 enum class ShadingMode 
 {
@@ -201,11 +202,13 @@ void line_bresenham(int x0, int y0, int x1, int y1, TGAImage& image, const TGACo
 }
 
 void triangle(
-    vec2 t0, vec2 t1, vec2 t2, 
-    vec3 w0, vec3 w1, vec3 w2, 
+    vec2 t0, vec2 t1, vec2 t2,
+    vec3 w0, vec3 w1, vec3 w2,
     float ity0, float ity1, float ity2,
     vec3 n0, vec3 n1, vec3 n2, vec3 light_dir, vec3 cameravec,
-    vec2 uv0, vec2 uv1, vec2 uv2, const TGAImage& diffuse_map,
+    vec2 uv0, vec2 uv1, vec2 uv2, const Model* model,
+    float clip_w0, float clip_w1, float clip_w2,
+    vec3 view0, vec3 view1, vec3 view2,
     ShadingMode mode,
     TGAImage& image, std::vector<float>& zbuffer
 ) {
@@ -220,6 +223,7 @@ void triangle(
     if (maxY > image.height()) maxY = image.height()-1;
 
     float ambient = 0.1; 
+    float invw0 = 1 / clip_w0;  float invw1 = 1 / clip_w1;  float invw2 = 1 / clip_w2;
  
     for (int x = minX; x <= maxX; ++x)
     {
@@ -229,8 +233,34 @@ void triangle(
             vec3 bc = barycentric(t0, t1, t2, p);
 
             if (bc.x < 0 || bc.y < 0 || bc.z < 0) continue;
-            
+
+            int idx = x + y * image.width();
             float pz = bc.x * w0.z + bc.y * w1.z + bc.z * w2.z;
+            if (zbuffer[idx] >= pz) continue;
+
+            vec3 np = bc.x * n0 + bc.y * n1 + bc.z * n2;
+            np = normalized(np);
+            
+            vec2 uw = bc.x * uv0 * invw0 + bc.y * uv1 * invw1 + bc.z * uv2 * invw2;
+            float invw = bc.x * invw0 + bc.y * invw1 + bc.z * invw2;
+            vec2 uv_p = uw / invw;
+
+            int tx = std::clamp(static_cast<int>(model->diffuse().width() * uv_p.x), 0, model->diffuse().width() - 1);
+            int ty = std::clamp(static_cast<int>(model->diffuse().height() * uv_p.y), 0, model->diffuse().height() - 1);
+
+            vec3 n_tangent = model->normal(uv_p).xyz();
+
+            mat<3, 3> A = { view1 - view0, view2 - view0, np };
+            mat<3, 3> AI = A.invert();
+            vec3 u = { uv1.x - uv0.x, uv2.x - uv0.x, 0 };
+            vec3 v = { uv1.y - uv0.y, uv2.y - uv0.y, 0 };
+
+            vec3 T = normalized(AI * u);
+            vec3 B = normalized(AI * v);
+
+            vec3 n_final = normalized(n_tangent.x * T + n_tangent.y * B + n_tangent.z * np);
+
+   
             float ity = 0;
 
             if (mode == ShadingMode::GOUROUD) 
@@ -239,14 +269,11 @@ void triangle(
             }
             else
             {
-                vec3 np = bc.x * n0 + bc.y * n1 + bc.z * n2;
-
-                np = normalized(np); // 1 ni modositai
-                float IdotN = ( - 1 * light_dir.x) * np.x + (-1*light_dir.y) * np.y + (-1*light_dir.z) * np.z;
+                float IdotN = ( - 1 * light_dir.x) * n_final.x + (-1*light_dir.y) * n_final.y + (-1*light_dir.z) * n_final.z;
 
                 float diffuse = std::clamp(IdotN, 0.0f, 1.0f);;
 
-                vec3 reflect = normalized(light_dir + 2 * (IdotN)*np);
+                vec3 reflect = normalized(light_dir + 2 * (IdotN)*n_final);
                 float specular = reflect.x * cameravec.x + reflect.y * cameravec.y + reflect.z * cameravec.z;
                 specular = std::pow(std::clamp(specular, 0.0f, 1.0f), 32);
                 
@@ -254,26 +281,19 @@ void triangle(
                 ity = ambient + 0.7 * diffuse + 0.5 * specular; // 1超えないように仮の係数をかける
             }
 
-            vec2 uv_p = bc.x * uv0 + bc.y * uv1 + bc.z * uv2;
-            int tx = std::clamp(static_cast<int>(diffuse_map.width() * uv_p.x), 0, diffuse_map.width() - 1);
-            int ty = std::clamp(static_cast<int>(diffuse_map.height() * uv_p.y), 0, diffuse_map.height() - 1);
 
-            TGAColor tex_color = diffuse_map.get(tx, ty);
-
-            
+            TGAColor tex_color = model->diffuse().get(tx, ty);
             uint8_t b = std::clamp(tex_color.bgra[0] * ity, 0.0f, 255.0f);
             uint8_t g = std::clamp(tex_color.bgra[1] * ity, 0.0f, 255.0f);
             uint8_t r = std::clamp(tex_color.bgra[2] * ity, 0.0f, 255.0f);
             
             TGAColor face_color = {b, g, r, 255};
+     
 
-            int idx = x + y * image.width();
-
-            if (zbuffer[idx] < pz)
-            {
-                image.set(x, y, face_color);
-                zbuffer[idx] = pz;
-            }
+           
+            image.set(x, y, face_color);
+            zbuffer[idx] = pz;
+            
             
         }
     }
@@ -318,11 +338,16 @@ int main(int argc, char** argv) {
 
     std::vector<float> zbuffer(width * height, -std::numeric_limits<float>::max());
 
-    std::cout << "Current path: " << std::filesystem::current_path() << std::endl;
-    std::string model_path = (argc >= 2) ? argv[1] : "obj/african_head/african_head.obj";
-    Model* model = new Model(model_path.c_str());
-    TGAImage diffuse_map;
-    diffuse_map.read_tga_file("obj/african_head/african_head_diffuse.tga");
+    std::vector<std::string> model_path = { 
+        "obj/african_head/african_head.obj", 
+        "obj/african_head/african_head_eye_inner.obj" 
+    };
+    if (argc >= 2) model_path = { argv[1] };
+
+    //TGAImage diffuse_map;
+    //TGAImage normal_map;
+    //diffuse_map.read_tga_file("obj/african_head/african_head_diffuse.tga");
+    //normal_map.read_tga_file("obj/african_head/african_head_nm_tangent.tga");
 
     ShadingMode mode = ShadingMode::PHONG;  
     
@@ -346,64 +371,74 @@ int main(int argc, char** argv) {
     float c = norm(eye - center); // c - z
     Projection[3][2] = -1.0f / c; // Perspective Projection : 透視図法
 
-    
-    
-    for (int i = 0; i < model->nfaces(); i++) 
-    {
-        
-        vec2 screen_coords[3]; // coordinate : 座標
-        vec2 uvs[3];
-        vec3 ndc_coords[3]; 
-        float intensity[3]; //gouroud
-        vec3 normals[3]; // phong
+    for (const std::string& path : model_path) {
+        Model* model = new Model(path.c_str());
 
-        for (int j = 0; j < 3; j++) 
+        for (int i = 0; i < model->nfaces(); i++)
         {
-            vec4 v = model->vert(i, j);
-            vec4 n_local = model->normal(i, j);
-            uvs[j] = model->uv(i, j);
-            n_local[3] = 0.0f;
 
-            vec3 n = normalized((ModelView * n_local).xyz());
+            vec2 screen_coords[3]; // coordinate : 座標
+            vec3 view_coords[3];
+            vec2 uvs[3];
+            vec3 ndc_coords[3];
+            float intensity[3]; //gouroud
+            float w_coords[3];
+            vec3 normals[3]; // phong
 
-            normals[j] = n;
-            intensity[j] = std::clamp(n * -1*light_dir, 0.0, 1.0);
-            
-            vec4 clip_coords = Projection * ModelView * v;
+            for (int j = 0; j < 3; j++)
+            {
+                vec4 v = model->vert(i, j);
+                vec4 n_local = model->normal(i, j);
+                uvs[j] = model->uv(i, j);
+                n_local[3] = 0.0f;
 
-            vec3 ndc = {
-                clip_coords.x / clip_coords.w,
-                clip_coords.y / clip_coords.w,
-                clip_coords.z / clip_coords.w
-            };
+                vec3 n = normalized((ModelView * n_local).xyz());
 
-            ndc_coords[j] = ndc;
+                normals[j] = n;
+                intensity[j] = std::clamp(n * -1 * light_dir, 0.0, 1.0);
 
-            screen_coords[j].x = (ndc.x + 1.f) * width / 2.f;
-            screen_coords[j].y = (ndc.y + 1.f) * height / 2.f;
+                vec4 view_v = ModelView * v;
+                view_coords[j] = view_v.xyz();
+
+                vec4 clip_coords = Projection * view_v;
+                w_coords[j] = clip_coords.w;
+
+                vec3 ndc = {
+                    clip_coords.x / clip_coords.w,
+                    clip_coords.y / clip_coords.w,
+                    clip_coords.z / clip_coords.w
+                };
+
+                ndc_coords[j] = ndc;
+
+                screen_coords[j].x = (ndc.x + 1.f) * width / 2.f;
+                screen_coords[j].y = (ndc.y + 1.f) * height / 2.f;
+            }
+
+            vec3 edge1 = ndc_coords[2] - ndc_coords[0];
+            vec3 edge2 = ndc_coords[1] - ndc_coords[0];
+
+            if (cross(edge1, edge2).z < 0)
+            {
+                triangle(
+                    screen_coords[0], screen_coords[1], screen_coords[2],
+                    ndc_coords[0], ndc_coords[1], ndc_coords[2],
+                    intensity[0], intensity[1], intensity[2],
+                    normals[0], normals[1], normals[2], light_dir, cameravec,
+                    uvs[0], uvs[1], uvs[2], model,
+                    w_coords[0], w_coords[1], w_coords[2],
+                    view_coords[0], view_coords[1], view_coords[2],
+                    mode,
+                    framebuffer, zbuffer
+                );
+            }
         }
-
-        vec3 edge1 = ndc_coords[2] - ndc_coords[0];
-        vec3 edge2 = ndc_coords[1] - ndc_coords[0];
-        
-        if (cross(edge1, edge2).z < 0)
-        {
-            triangle(
-                screen_coords[0], screen_coords[1], screen_coords[2], 
-                ndc_coords[0], ndc_coords[1], ndc_coords[2],
-                intensity[0], intensity[1], intensity[2],
-                normals[0], normals[1], normals[2], light_dir, cameravec, 
-                uvs[0], uvs[1], uvs[2], diffuse_map,
-                mode,
-                framebuffer, zbuffer
-            );
-        }
+        delete model;
     }
     
 
     
 
-    framebuffer.write_tga_file("framebuffer_texture.tga");
-    delete model;
+    framebuffer.write_tga_file("framebuffer_nm.tga");
     return 0;
 }
